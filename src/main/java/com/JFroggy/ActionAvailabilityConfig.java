@@ -26,19 +26,74 @@ public interface ActionAvailabilityConfig extends Config
 	String dotStylingSection = "dotStylingSection";
 
 	@ConfigSection(
+		name = "Idle Dot Settings",
+		description = "Settings for the default idle dot",
+		position = 2
+	)
+	String idleDotSection = "idleDotSection";
+
+	@ConfigSection(
 		name = "Animation Color Configurations",
 		description = "Configurations for player animation colors",
-		position = 2
+		position = 3
 	)
 	String animationColorConfigSection = "animationColorConfigSection";
 
-	int idleDotDisplayDuration();
+	@ConfigSection(
+		name = "Interaction Trigger Configurations",
+		description = "Configurations for interaction-based triggers",
+		position = 4
+	)
+	String interactionTriggerConfigSection = "interactionTriggerConfigSection";
 
-	boolean enableDefaultIdleDot();
+	@ConfigItem(
+		keyName = "idleDotDisplayDuration",
+		name = "Idle Dot Active Duration (ticks)",
+		description = "How many ticks the idle dot is displayed at full size after being triggered (0 for infinite, -1 to disable).",
+		section = idleDotSection
+	)
+	default int idleDotDisplayDuration()
+	{
+		return 0; // Default to infinite
+	}
 
-	Color defaultIdleDotColor();
+	@ConfigItem(
+		keyName = "enableDefaultIdleDot",
+		name = "Enable Default Idle Dot",
+		description = "Enables the default idle dot (ready indicator) when no specific animation is active or after movement.",
+		section = idleDotSection
+	)
+	default boolean enableDefaultIdleDot()
+	{
+		return true; // Changed default to true for better user experience
+	}
 
-	int defaultIdleDotOpacity();
+	@ConfigItem(
+		keyName = "defaultIdleDotColor",
+		name = "Default Idle Dot Color",
+		description = "The color of the default idle dot (ready indicator).",
+		section = idleDotSection
+	)
+	default Color defaultIdleDotColor()
+	{
+		return Color.GREEN;
+	}
+
+	@Range(
+		min = 0,
+		max = 255
+	)
+	@ConfigItem(
+		keyName = "defaultIdleDotOpacity",
+		name = "Default Idle Dot Opacity",
+		description = "The opacity of the default idle dot (0-255).",
+		section = idleDotSection
+	)
+	default int defaultIdleDotOpacity()
+	{
+		return 100;
+	}
+
 
 	enum CountdownDisplayMode
 	{
@@ -216,7 +271,7 @@ public interface ActionAvailabilityConfig extends Config
 	)
 	default Color countdownZeroColor()
 	{
-		return Color.RED;
+		return Color.GREEN;
 	}
 
 	@ConfigItem(
@@ -249,9 +304,9 @@ public interface ActionAvailabilityConfig extends Config
 	)
 	@ConfigItem(
 		keyName = "dotInactivityDuration",
-		name = "Green Dot Inactivity Duration (ticks)",
-		description = "How many ticks the green dot remains at full size after its active duration, before fading out.",
-		section = dotStylingSection
+		name = "Idle Dot Inactivity Duration (ticks)",
+		description = "How many ticks the idle dot remains at full size after its active duration, before fading out.",
+		section = idleDotSection
 	)
 	default int dotInactivityDuration()
 	{
@@ -264,28 +319,13 @@ public interface ActionAvailabilityConfig extends Config
 	)
 	@ConfigItem(
 		keyName = "dotFadeOutDuration",
-		name = "Green Dot Fade Out Duration (ticks)",
-		description = "How many ticks the green dot takes to fade out after inactivity period.",
-		section = dotStylingSection
+		name = "Idle Dot Fade Out Duration (ticks)",
+		description = "How many ticks the idle dot takes to fade out after inactivity period.",
+		section = idleDotSection
 	)
 	default int dotFadeOutDuration()
 	{
 		return 3; // Default to 3 ticks for fading out
-	}
-
-	@Range(
-		min = 0,
-		max = 10
-	)
-	@ConfigItem(
-		keyName = "greenDotDisplayDuration",
-		name = "Green Dot Active Duration (ticks)",
-		description = "How many ticks the green dot is displayed at full size after being triggered (0 for infinite).",
-		section = animationColorConfigSection
-	)
-	default int greenDotDisplayDuration()
-	{
-		return 0; // Default to infinite
 	}
 
 	@ConfigItem(
@@ -310,35 +350,23 @@ public interface ActionAvailabilityConfig extends Config
 	void setAnimationColorConfigs(String json);
 
 	@ConfigItem(
-		keyName = "enableGreenDot",
-		name = "Enable Green Dot",
-		description = "Enables the green dot (ready indicator) when no specific animation is active or after movement.",
-		section = animationColorConfigSection
+		keyName = "interactionTriggerConfigs",
+		name = "Interaction Trigger Configurations",
+		description = "The JSON string storing interaction trigger configurations",
+		hidden = true,
+		section = interactionTriggerConfigSection
 	)
-	default boolean enableGreenDot()
+	default String interactionTriggerConfigs()
 	{
-		return false;
+		return "[]";
 	}
 
 	@ConfigItem(
-		keyName = "greenDotColor",
-		name = "Green Dot Color",
-		description = "The color of the green dot (ready indicator).",
-		section = animationColorConfigSection
+		keyName = "interactionTriggerConfigs",
+		name = "",
+		description = "",
+		hidden = true,
+		section = interactionTriggerConfigSection
 	)
-	default Color greenDotColor()
-	{
-		return Color.GREEN; // Changed default to green
-	}
-
-	@ConfigItem(
-		keyName = "greenDotOpacity",
-		name = "Green Dot Opacity",
-		description = "The opacity of the green dot (0-255).",
-		section = animationColorConfigSection
-	)
-	default int greenDotOpacity()
-	{
-		return 100;
-	}
+	void setInteractionTriggerConfigs(String json);
 }

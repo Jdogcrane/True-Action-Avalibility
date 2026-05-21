@@ -16,6 +16,7 @@ import net.runelite.api.coords.WorldPoint; // Import WorldPoint
 import net.runelite.api.events.AnimationChanged;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
+import net.runelite.api.events.MenuOptionClicked; // Import for interaction triggers
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.plugins.Plugin;
@@ -31,6 +32,7 @@ import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
+
 
 @Slf4j
 @PluginDescriptor(
@@ -64,8 +66,15 @@ public class ActionAvailabilityMain extends Plugin
     private List<AnimationColorConfigEntry> animationColorConfigs;
 	private final Type animationColorConfigListType = new TypeToken<ArrayList<AnimationColorConfigEntry>>(){}.getType();
 
+	// Public getter for interaction trigger configurations
+	@Getter
+	private List<InteractionConfigEntry> interactionTriggerConfigs;
+	private final Type interactionTriggerConfigListType = new TypeToken<ArrayList<InteractionConfigEntry>>(){}.getType();
+
+
 	private int specificAnimationTicksRemaining = 0; // Renamed from currentAnimationTicksRemaining
-	private int currentActiveDotId = -2; // Renamed from currentDotAnimationId (-1 for default idle, -2 for no dot, other for specific animation)
+	private int currentActiveDotId = -2; // Renamed from currentDotAnimationId (-1 for default idle, -2 for no dot, -3 for expired custom dot, other for specific animation)
+	private int currentActiveInteractionId = -2; // -1 for default idle, -2 for no dot, -3 for expired custom dot, other for specific interaction
 
 	// Fields for tracking player animation history
 	private int lastAnimationId = -1;
@@ -75,6 +84,7 @@ public class ActionAvailabilityMain extends Plugin
 
 	// Fields for tracking player movement
 	private WorldPoint previousWorldPoint;
+	@Getter // Added Getter for isPlayerMoving
 	private boolean isPlayerMoving;
 
 	// Fields for idle dot lifecycle
@@ -90,6 +100,19 @@ public class ActionAvailabilityMain extends Plugin
 		int durationTicks;
 	}
 
+	@Value
+	public static class InteractionHistoryEntry
+	{
+		int targetId;
+		String menuOption; // Added for more descriptive history
+		String menuTarget; // Added for more descriptive history
+		int durationTicks;
+	}
+
+	private final LinkedList<InteractionHistoryEntry> recentInteractionHistory = new LinkedList<>();
+	private static final int MAX_RECENT_INTERACTIONS_HISTORY = 3;
+
+
 	@Override
 	protected void startUp()
 	{
@@ -98,6 +121,7 @@ public class ActionAvailabilityMain extends Plugin
 		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "/action_availability_icon.png");
 
 		animationColorConfigs = loadAnimationColorConfigs();
+		interactionTriggerConfigs = loadInteractionTriggerConfigs(); // Load interaction configs
 
 		panel = new ActionAvailabilityPanel(this);
 
@@ -140,6 +164,46 @@ public class ActionAvailabilityMain extends Plugin
 	{
 		ticksSinceLastAnimationChange++;
 
+		// --- Priority 0: Handle Expired Custom Dot Transition ---
+		if (currentActiveDotId == -3) // Custom dot just expired and showed "0"
+		{
+			if (config.enableDefaultIdleDot())
+			{
+				applyIdleDot(); // Transition to idle dot
+			}
+			else
+			{
+				playerDotOverlay.setShowDot(false); // Hide the dot
+				playerDotOverlay.setCountdownText(null);
+				currentActiveDotId = -2; // No dot active
+			}
+			return; // Handled, skip other logic
+		}
+
+		// --- Priority 0.5: Handle Active Custom Animation/Interaction Dot ---
+		// If a custom animation or interaction dot is active, only process its countdown.
+		// Movement and idle logic should not override it.
+		if (currentActiveDotId > 0 || currentActiveDotId == -4) // Custom animation or interaction dot is active
+		{
+			if (specificAnimationTicksRemaining > 0 && specificAnimationTicksRemaining != Integer.MAX_VALUE)
+			{
+				specificAnimationTicksRemaining--;
+				if (specificAnimationTicksRemaining == 0)
+				{
+					playerDotOverlay.setCurrentColor(config.countdownZeroColor());
+					playerDotOverlay.setCountdownText(null);
+					currentActiveDotId = -3; // Mark as expired, will be handled next tick
+				}
+				else
+				{
+					playerDotOverlay.setCountdownColor(config.countdownColor());
+					playerDotOverlay.setCountdownText(String.valueOf(specificAnimationTicksRemaining));
+				}
+			}
+			return; // Skip all other dot logic if a custom dot is active
+		}
+
+
 		// --- Priority 1: Handle Idle Dot Fade-Out ---
 		if (idleDotFadeOutDurationRemaining > 0)
 		{
@@ -157,12 +221,6 @@ public class ActionAvailabilityMain extends Plugin
 			}
 			return; // Skip other dot logic during fade-out
 		}
-		// If fade-out just finished (idleDotFadeOutDurationRemaining was 1, now 0), and currentActiveDotId is -2,
-		// we should not proceed to other idle dot logic.
-		if (currentActiveDotId == -2) {
-		    return;
-		}
-
 
 		// --- Priority 2: Handle Idle Dot Inactivity ---
 		if (idleDotInactivityDurationRemaining > 0)
@@ -183,14 +241,9 @@ public class ActionAvailabilityMain extends Plugin
 			}
 			return; // Skip other dot logic during inactivity
 		}
-		// If inactivity just finished and led to currentActiveDotId = -2, we should not proceed.
-		if (currentActiveDotId == -2) {
-		    return;
-		}
-
 
 		// --- Priority 3: Handle Idle Dot Active Duration ---
-		if (currentActiveDotId == -1 && idleDotActiveDurationRemaining > 0) // Removed config.idleDotDisplayDuration() > 0
+		if (currentActiveDotId == -1 && idleDotActiveDurationRemaining > 0)
 		{
 			idleDotActiveDurationRemaining--;
 			if (idleDotActiveDurationRemaining == 0)
@@ -213,35 +266,8 @@ public class ActionAvailabilityMain extends Plugin
 			}
 			return; // Skip other dot logic
 		}
-		// If active duration just finished and led to currentActiveDotId = -2, we should not proceed.
-		if (currentActiveDotId == -2) {
-		    return;
-		}
 
-		// --- Priority 4: Handle Specific Animation Dot Countdown and Expiry ---
-		if (currentActiveDotId > 0) // Specific animation dot is active
-		{
-			if (specificAnimationTicksRemaining > 0 && specificAnimationTicksRemaining != Integer.MAX_VALUE) // Only countdown if not infinite
-			{
-				specificAnimationTicksRemaining--;
-				if (specificAnimationTicksRemaining == 0)
-				{
-					// Countdown hit 0, show "0" in zero color for one tick, then immediately switch to idle dot
-					playerDotOverlay.setCountdownColor(config.countdownZeroColor());
-					playerDotOverlay.setCountdownText("0");
-					applyIdleDot(); // Switch to green idle dot
-					return; // Exit, as we've transitioned to idle dot
-				}
-				else // Still counting down
-				{
-					playerDotOverlay.setCountdownColor(config.countdownColor());
-					playerDotOverlay.setCountdownText(String.valueOf(specificAnimationTicksRemaining));
-				}
-			}
-			return; // Skip other dot logic if a specific dot is active
-		}
-
-		// --- Priority 5: Movement Override ---
+		// --- Priority 4: Movement Override ---
 		Player localPlayer = client.getLocalPlayer();
 		if (localPlayer != null)
 		{
@@ -267,7 +293,7 @@ public class ActionAvailabilityMain extends Plugin
 			previousWorldPoint = null; // Reset if player is not available
 		}
 
-		// --- Priority 6: Default to Idle Dot if nothing else is active ---
+		// --- Priority 5: Default to Idle Dot if nothing else is active ---
 		if (currentActiveDotId == -2 && config.enableDefaultIdleDot())
 		{
 			applyIdleDot();
@@ -296,10 +322,23 @@ public class ActionAvailabilityMain extends Plugin
 		}
 
 		// If the previous animation had a -1 duration (infinite ticks) and a new animation starts,
-		// it means the previous animation has ended. Transition to idle dot.
+		// it means the previous animation has ended. We need to clear the old dot state
+		// before applying the new animation's config.
+		// We should only clear if the current dot is an animation dot with infinite duration.
 		if (currentActiveDotId > 0 && specificAnimationTicksRemaining == Integer.MAX_VALUE)
 		{
-			applyIdleDot();
+			// Reset the state related to the previous infinite animation dot
+			specificAnimationTicksRemaining = 0;
+			currentActiveDotId = -2; // Mark as no dot active, so applyPlayerAnimationConfig can set the new one
+			currentActiveInteractionId = -2; // Clear interaction ID too, just in case
+			playerDotOverlay.setCountdownText(null);
+		}
+
+		// If a custom dot (animation or interaction) is currently active and counting down (finite duration),
+		// do not override it with a new animation config. The countdown should continue.
+		if ((currentActiveDotId > 0 || currentActiveDotId == -4) && specificAnimationTicksRemaining > 0 && specificAnimationTicksRemaining != Integer.MAX_VALUE)
+		{
+			return; // A custom dot is active and counting down, let it finish.
 		}
 
 		lastAnimationId = newAnimationId;
@@ -312,6 +351,58 @@ public class ActionAvailabilityMain extends Plugin
 
 		// Apply player animation config for the new animation
 		applyPlayerAnimationConfig(newAnimationId);
+	}
+
+	@Subscribe
+	public void onMenuOptionClicked(MenuOptionClicked event)
+	{
+		// Only process if a custom animation dot is NOT active
+		if (currentActiveDotId > 0)
+		{
+			return;
+		}
+
+		// Check for matching interaction triggers
+		for (InteractionConfigEntry entry : interactionTriggerConfigs)
+		{
+			boolean idMatch = (entry.getTargetId() == -1 || entry.getTargetId() == event.getId());
+
+			if (idMatch) // Removed menuOption check
+			{
+				// Apply specific interaction dot
+				Color dotColor = new Color(entry.getColor().getRed(), entry.getColor().getGreen(), entry.getColor().getBlue(), entry.getOpacity());
+				int dotDuration = entry.getTickDuration();
+
+				playerDotOverlay.setCurrentColor(dotColor);
+				playerDotOverlay.setShowDot(true);
+				currentActiveDotId = -4; // Indicate an interaction dot is active
+				currentActiveInteractionId = entry.getTargetId(); // Store the target ID for potential future use
+				playerDotOverlay.setCountdownColor(config.countdownColor());
+
+				if (dotDuration > 0)
+				{
+					specificAnimationTicksRemaining = dotDuration;
+					if (config.countdownDisplayMode() == ActionAvailabilityConfig.CountdownDisplayMode.COUNTDOWN_ONLY || config.countdownDisplayMode() == ActionAvailabilityConfig.CountdownDisplayMode.BOTH)
+					{
+						playerDotOverlay.setCountdownText(String.valueOf(dotDuration));
+					} else {
+						playerDotOverlay.setCountdownText(null);
+					}
+				}
+				else if (dotDuration == -1) // Infinite duration
+				{
+					specificAnimationTicksRemaining = Integer.MAX_VALUE;
+					playerDotOverlay.setCountdownText(null);
+				}
+				else // dotDuration == 0 or other invalid, treat as no specific duration
+				{
+					specificAnimationTicksRemaining = 0; // Will immediately transition to idle/hidden on next tick
+					playerDotOverlay.setCountdownText(null);
+				}
+				addRecentInteractionHistoryEntry(new InteractionHistoryEntry(entry.getTargetId(), event.getMenuOption(), event.getMenuTarget(), entry.getTickDuration())); // Add to history
+				return; // Found a match, apply dot and exit
+			}
+		}
 	}
 
 
@@ -336,18 +427,39 @@ public class ActionAvailabilityMain extends Plugin
 		return animationColorConfigs;
 	}
 
-    // Method to save player animation configurations (used for initial add)
-	public void saveAnimationColorConfigs(List<AnimationColorConfigEntry> configs)
-	{
-		this.animationColorConfigs = configs;
-		saveCurrentAnimationColorConfigs();
-	}
-
 	// Method to save the current internal list of player animation configurations
 	public void saveCurrentAnimationColorConfigs()
 	{
 		String json = gson.toJson(this.animationColorConfigs, animationColorConfigListType);
 		config.setAnimationColorConfigs(json);
+	}
+
+	// Method to load interaction trigger configurations
+	private List<InteractionConfigEntry> loadInteractionTriggerConfigs()
+	{
+		String json = config.interactionTriggerConfigs();
+		if (json == null || json.isEmpty() || json.equals("[]"))
+		{
+			interactionTriggerConfigs = new ArrayList<>();
+		}
+		else
+		{
+			interactionTriggerConfigs = gson.fromJson(json, interactionTriggerConfigListType);
+			interactionTriggerConfigs.forEach(entry -> {
+				if (entry.getOpacity() == 0 && entry.getColor() != null) {
+					entry.setOpacity(entry.getColor().getAlpha());
+					if (entry.getOpacity() == 0) entry.setOpacity(255);
+				}
+			});
+		}
+		return interactionTriggerConfigs;
+	}
+
+	// Method to save the current internal list of interaction trigger configurations
+	public void saveCurrentInteractionTriggerConfigs()
+	{
+		String json = gson.toJson(this.interactionTriggerConfigs, interactionTriggerConfigListType);
+		config.setInteractionTriggerConfigs(json);
 	}
 
 	private void addRecentAnimationHistoryEntry(AnimationHistoryEntry entry)
@@ -370,6 +482,26 @@ public class ActionAvailabilityMain extends Plugin
 		return new ArrayList<>(recentAnimationHistory);
 	}
 
+	private void addRecentInteractionHistoryEntry(InteractionHistoryEntry entry)
+	{
+		recentInteractionHistory.removeIf(e -> e.getTargetId() == entry.getTargetId());
+		recentInteractionHistory.addFirst(entry);
+
+		while (recentInteractionHistory.size() > MAX_RECENT_INTERACTIONS_HISTORY)
+		{
+			recentInteractionHistory.removeLast();
+		}
+		if (panel != null)
+		{
+			panel.updateRecentInteractions();
+		}
+	}
+
+	public List<InteractionHistoryEntry> getRecentInteractionHistory()
+	{
+		return new ArrayList<>(recentInteractionHistory);
+	}
+
 	// New method to recheck and apply player animation config for the current animation
 	public void recheckCurrentPlayerAnimation()
 	{
@@ -384,11 +516,12 @@ public class ActionAvailabilityMain extends Plugin
 	// Helper method to apply the idle dot state (green color, no countdown)
 	private void applyIdleDot()
 	{
-		// Reset all idle dot lifecycle states
+		// Reset all dot lifecycle states
 		idleDotActiveDurationRemaining = 0;
 		idleDotInactivityDurationRemaining = 0;
 		idleDotFadeOutDurationRemaining = 0;
 		idleDotFadeOutStartSize = 0;
+		specificAnimationTicksRemaining = 0; // Reset animation timer
 
 		playerDotOverlay.setCurrentRenderDotSize(config.dotSize());
 
@@ -430,7 +563,7 @@ public class ActionAvailabilityMain extends Plugin
 	// Helper method to apply player animation configuration
 	private void applyPlayerAnimationConfig(int animationId)
 	{
-		// Reset all idle dot lifecycle states
+		// Reset all idle dot lifecycle states, as we are potentially applying a new animation dot
 		idleDotActiveDurationRemaining = 0;
 		idleDotInactivityDurationRemaining = 0;
 		idleDotFadeOutDurationRemaining = 0;
@@ -484,8 +617,10 @@ public class ActionAvailabilityMain extends Plugin
 		}
 		else // No matched entry for the current animationId
 		{
-			// If no specific animation matches, and no dot is currently active, then transition to idle dot.
-			if (currentActiveDotId == -2)
+			// If no specific animation matches, and no custom interaction dot is currently active, then transition to idle dot.
+			// This prevents an animation change (e.g., stopping an animation that had a custom dot) from immediately
+			// overriding an active interaction dot.
+			if (currentActiveDotId != -4 && currentActiveDotId != -1) // Only apply idle if no interaction or existing idle dot
 			{
 				applyIdleDot();
 			}

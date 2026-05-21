@@ -16,4 +16,25 @@ public class AnimationColorConfigEntry
     private Color color;
     private int tickDuration;
     private int opacity;
+
+    // Manually added getters and setters to resolve compilation issues
+    public int getAnimationId() {
+        return animationId;
+    }
+
+    public Color getColor() {
+        return color;
+    }
+
+    public int getTickDuration() {
+        return tickDuration;
+    }
+
+    public int getOpacity() {
+        return opacity;
+    }
+
+    public void setOpacity(int opacity) {
+        this.opacity = opacity;
+    }
 }
